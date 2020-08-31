@@ -92,4 +92,4 @@ set generatedon = now();
 update `sky_retention_platform_balerion.callgroups`
 set generatedon = now();
 
-##############################################################################
+
