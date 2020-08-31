@@ -1,0 +1,758 @@
+---
+output:
+  html_document:
+    self_contained: yes
+    highlight: null
+    mathjax: null
+    theme: default
+    code_folding : hide
+    toc : true
+    number_sections : true
+params:
+  startDate : '2020-08-26'
+  endDate : '2020-08-27'
+  tableName   : '`vaca_ta`'
+  calltime_aca: 'callstarttime'
+  calltime_ecl: 'calltime'
+  programID : 'bskybinternal'
+  queue : 'platform'
+  vaca_filter : "and customgroup = 'platform classic'"
+  eval_filter : "and area like '%platform%'"
+  cg_filter : " callgroup like '%balerion%' and iscurrent = 1"
+  fileName : "Negative_Gain_Report"
+  bucket : 5
+  database : "bskybsatmap"
+  CG_calls_filter : 10
+  optimizationmetric : ['issavedtv', 'issavedtv_trueup']
+  user : 'satmap_ai_bskyb'
+  pass : "$bskyb#123"
+  host : '10.105.2.57'
+  port : 3307
+  top : 0.7
+  NormalisationFactor : floor(cp_actual*10)
+---
+---
+  title: `r paste0('Negative Gain Report for ', params$queue)`
+---
+  
+```{r packages, include=FALSE , warning=FALSE , message=FALSE}
+library(DBI)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(RMySQL)
+library(data.table)
+library(stringr)
+#library(modelr)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+library(RColorBrewer)
+library(plotly)
+library(shiny)
+# cols <- rev(brewer.pal(11, 'RdYlBu'))
+```
+
+
+```{r rounding, echo=FALSE , warning=FALSE , message=FALSE}
+round_off <- function(df){
+  x <- df %>%
+    mutate_if(is.numeric, round, digits=3)
+  return(x)
+}
+```
+
+
+```{r vacaQuery , include=FALSE , echo=FALSE , warning=FALSE , message=FALSE}
+
+vacaQuery <- function(params){
+  
+  optims <- params$optimizationmetric
+  
+  for(i in 1:length(optims)){
+    optims[i] <- paste0(optims[i], " as optimizationmetric_", i)
+  }
+  
+  optims <- paste0(optims, collapse = ",")
+  my_query = paste0("SELECT callGuid, " , params$calltime_aca , " as ct ,", optims, ", nagent , on_off 
+                    FROM " , params$tableName , "
+                    where " , params$calltime_aca , " between '" , params$startDate , "' and '" , params$endDate  ,"' and
+                    " , params$calltime_ecl , " between '" , params$startDate , "' and '" , params$endDate  ,"' and isRelevant = 1 ",params$vaca_filter,";
+                    ")
+  return(my_query)
+}
+
+```
+
+
+```{r cgQuery , include=FALSE , echo=FALSE , warning=FALSE , message=FALSE}
+
+cgQuery <- function(params){
+  
+  my_query = paste0("select * from ",params$database,".`", params$programID , "_platform.callGroups`
+                    where   ",params$cg_filter,";
+                    ")
+  return(my_query)
+}
+
+```
+
+```{r evalLogQuery , include=FALSE , echo=FALSE , warning=FALSE , message=FALSE}
+
+evalLogQuery <- function(params){
+  
+  my_query = paste0("SELECT * ,  ", params$NormalisationFactor ," as nf
+                    FROM ",params$database,".`bskybinternal.vevaluatorlog`
+                    where callTime between '" , params$startDate , "' and '" , params$endDate  ,"' ",params$eval_filter,";
+                    ")
+  return(my_query)
+}
+```
+
+```{r get_vaca , include=FALSE, echo=FALSE  , warning=FALSE , message=FALSE}
+
+my_query <- vacaQuery(params)
+
+MySQLConnect216AI <- dbConnect(dbDriver("MySQL"),user=params$user, password=params$pass,
+                               dbname=params$database, host=params$host, port = params$port)
+
+
+VARNAME <- dbGetQuery(MySQLConnect216AI, my_query); 
+
+on.exit(dbDisconnect(MySQLConnect216AI))
+
+dist=as.data.frame(VARNAME)
+
+all_cons <- dbListConnections(MySQL())
+#print(all_cons)
+for(con in all_cons)
+  +  dbDisconnect(con)
+print(paste(length(all_cons), " connections killed."))
+
+vaca = dist
+setnames(vaca, tolower(names(vaca)))
+```
+
+
+```{r get_CG, include=FALSE, echo=FALSE  , warning=FALSE , message=FALSE}
+
+my_query <- cgQuery(params)
+
+MySQLConnect216AI <- dbConnect(dbDriver("MySQL"),user=params$user, password=params$pass,
+                               dbname=params$database, host=params$host, port = params$port)
+
+
+VARNAME <- dbGetQuery(MySQLConnect216AI, my_query); 
+
+on.exit(dbDisconnect(MySQLConnect216AI))
+
+dist=as.data.frame(VARNAME)
+
+all_cons <- dbListConnections(MySQL())
+#print(all_cons)
+for(con in all_cons)
+  +  dbDisconnect(con)
+print(paste(length(all_cons), " connections killed."))
+cg = dist
+cg <- cg %>%
+  arrange(CP_MixPercentile)
+rn <- 1:length(cg[,1])
+cg <- cbind(cg,rn)
+setnames(cg, tolower(names(cg)))
+
+```
+
+
+```{r get_evalLog, include=FALSE, echo=FALSE  , warning=FALSE , message=FALSE}
+
+my_query <- evalLogQuery(params)
+
+MySQLConnect216AI <- dbConnect(dbDriver("MySQL"),user=params$user, password=params$pass,
+                               dbname=params$database, host=params$host, port = params$port)
+
+
+VARNAME <- dbGetQuery(MySQLConnect216AI, my_query); 
+
+on.exit(dbDisconnect(MySQLConnect216AI))
+
+dist=as.data.frame(VARNAME)
+
+all_cons <- dbListConnections(MySQL())
+#print(all_cons)
+for(con in all_cons)
+  +  dbDisconnect(con)
+print(paste(length(all_cons), " connections killed."))
+evalLog = dist
+setnames(evalLog, tolower(names(evalLog)))
+```
+
+
+```{r Joins, warning= FALSE , echo= FALSE , message= FALSE}
+vaca_cols <- colnames(vaca)[grep("optimization",colnames(vaca))]
+vaca_eval_cols <- c("callguid",'on_off' = 'on_off.x','skill' = 'skill','calltime'='ct', 'ap_actual' , 'cp_actual' ,  'callguid','ap_loggedinpercentile','callgroup','nf' , 'evalscore_raw' , 'nagent', vaca_cols)
+vacaEval <- vaca %>%
+  left_join(evalLog , by = 'callguid') %>%
+  select(vaca_eval_cols) 
+
+vacaEval <- vacaEval[!is.na(vacaEval$ap_actual),]
+
+vacaEval <- vacaEval[!is.na(vacaEval$cp_actual),]
+vacaEval <- vacaEval %>%
+  filter(cp_actual < 1)
+vacaEval$nagent <- as.numeric(vacaEval$nagent)
+
+```
+
+
+
+```{r L3D, echo=F , warning=FALSE , message=FALSE}
+kable(sprintf('%s and %s' ,params$startDate , params$endDate)) %>% kable_styling()
+
+```
+
+
+```{r gain_summary, warning= FALSE , echo= FALSE , message= FALSE}
+gain_summary <- function(opt_metric)
+{
+  setDT(vacaEval)
+  vacaEval <- copy(vacaEval)
+  setnames(vacaEval, opt_metric, "opt_metric")
+
+  vacaEval[, date := as.Date(calltime)]
+  vacaEval[, ap_q := as.integer(floor(ap_actual*10) + 1)]
+  vacaEval[, cp_q := as.integer(floor(cp_actual*10) + 1)]
+  
+  res1 <- vacaEval[,.(calls = .N, sales = sum(opt_metric), cr = mean(opt_metric)), by = .(date = as.character(date), on_off = ifelse(on_off == 0, "OFF", "ON"))]
+  res2 <- vacaEval[,.(calls = .N, sales = sum(opt_metric), cr = mean(opt_metric)), by = .(date = as.character(date), on_off = ifelse(on_off == 0, "OFF", "ON"), ap_q)]
+  res3 <- vacaEval[,.(calls = .N, sales = sum(opt_metric), cr = mean(opt_metric)), by = .(date = as.character(date), on_off = ifelse(on_off == 0, "OFF", "ON"), cp_q)]
+  
+  res1 <- dcast(res1, date ~ on_off , value.var = c("calls", "sales", "cr"))
+  res2 <- dcast(res2, date + ap_q ~ on_off , value.var = c("calls", "sales", "cr"))
+  res3 <- dcast(res3, date + cp_q ~ on_off , value.var = c("calls", "sales", "cr"))
+
+  res1[, incrementals := (cr_ON - cr_OFF) * calls_ON]
+  res2[, incrementals := (cr_ON - cr_OFF) * calls_ON]
+  res3[, incrementals := (cr_ON - cr_OFF) * calls_ON]
+  
+  res2 <- res2[, .(APincrementals = sum(incrementals)), by = date]
+  res3 <- res3[, .(CPincrementals = sum(incrementals)), by = date]
+  
+  res1 <- merge(res1, res2, by = "date")
+  res1 <- merge(res1, res3, by = "date")
+  
+  overall <- res1[, .(date = 'Overall',
+                      calls_OFF = sum(calls_OFF),
+                      calls_ON = sum(calls_ON),
+                      sales_OFF = sum(sales_OFF),
+                      sales_ON = sum(sales_ON),
+                      incrementals = sum(incrementals),
+                      APincrementals = sum(APincrementals),
+                      CPincrementals = sum(CPincrementals)
+                      )][, `:=`(cr_OFF = sales_OFF/sales_ON,
+                                cr_ON = sales_ON/calls_ON)
+                      ]
+  
+  cols <- colnames(res1)
+  res2 <- rbindlist(list(res1, overall[, ..cols]))
+  res2[, `:=`(ABSGain = incrementals / calls_ON,
+              APABSGain = APincrementals / calls_ON,
+              CPABSGain = CPincrementals / calls_ON,
+              RELGain = 100.0 * (incrementals /(sales_ON - incrementals)),
+              APRELGain = 100.0 * (APincrementals /(sales_ON - APincrementals)),
+              CPRELGain = 100.0 * (CPincrementals /(sales_ON - CPincrementals))
+              
+              
+              )]
+  
+  res2 <- round_off(res2)
+  
+d <- 
+kable(res2, 'html') %>%
+  kable_styling(bootstrap_options = c("striped", "hover","bordered"), position = "left", full_width = T)
+d
+}
+
+```
+
+
+```{r scatter_plot, warning= FALSE , echo= FALSE , message= FALSE}
+
+scatter_plot <- function(opt_metric)
+{
+   vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+ 
+vacaEvalCG <- vacaEval %>%
+  inner_join(cg , by = 'callgroup')
+
+curRank <- vacaEvalCG %>%
+  group_by(callgroup) %>%
+  summarize(calls = n() , CR = mean(optimizationmetric)) %>%
+  arrange(CR)
+rn_cur <- 1:nrow(curRank)
+curRank <- cbind(curRank,rn_cur)
+
+sp1 <- vacaEvalCG %>% 
+  group_by(callgroup , rn) %>%
+  summarize(calls = n() , CR = mean(optimizationmetric)) %>%
+  arrange(CR)
+scatterPlot <- sp1 %>%
+  left_join(curRank , by = 'callgroup') %>%
+  select(callgroup , rn , rn_cur)
+correlation <- cor(scatterPlot$rn_cur, scatterPlot$rn)
+a <- ggplot(data = scatterPlot , aes(x = rn , y =rn_cur)) +
+  geom_point() +
+  geom_smooth( method = lm) +
+  labs(x = 'Deployed Rank', y = 'Production Rank', title = paste(' Correlation = ', correlation)) #+ 
+  # annotate("text", x = 4, y = 20, label = paste(' Correlation = ', correlation))
+a
+}
+```
+
+## Summary Tables
+### Gain Summary  {.tabset .tabset-pills}
+
+```{r , results='asis', fig.align= 'center', message=F, warning=F}
+optimizations <- colnames(vaca)[grep("optimization",colnames(vaca))]
+res <- lapply(optimizations, gain_summary)
+names(res) <- optimizations
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  print(res[[optimizations[i]]])
+  cat('\n', '<br>', '\n\n')
+  
+}
+```
+
+### CP Stats {.tabset .tabset-pills}
+
+```{r cp_quintile, warning= FALSE , echo= FALSE , message= FALSE, results= 'asis'}
+
+CP_stats <- function(opt_metric){
+    vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+cp_actual_quintile <- vacaEval %>%
+  mutate(cp_actual_bucket = floor(cp_actual*params$bucket)) %>%
+  group_by(cp_actual_bucket) %>%
+  summarize( VA_Delta = (mean(ifelse(ap_actual > params$top , optimizationmetric , NA) ,na.rm = T) - mean(ifelse(ap_actual < (1-params$top) , optimizationmetric , NA) ,na.rm = T))
+             , Calls_TopHalf = sum(ifelse(ap_actual > params$top, 1 , NA) ,na.rm = T)
+             , Calls_BottomHalf = sum(ifelse(ap_actual < (1-params$top), 1 , NA) ,na.rm = T)
+             , APDiff = (mean(ifelse(on_off == '1', ap_actual , NA) ,na.rm = T) - mean(ifelse(on_off == '0', ap_actual , NA) ,na.rm = T))
+             , Total_Calls = n()
+             , CR = mean(optimizationmetric,na.rm = T)
+             , on_AP = mean(ifelse(on_off == '1', ap_actual , NA) ,na.rm = T)
+             , off_AP = mean(ifelse(on_off == '0', ap_actual , NA) ,na.rm = T)
+             , on_CP = mean(ifelse(on_off == '1', cp_actual , NA) ,na.rm = T)
+            , off_CP = mean(ifelse(on_off == '0', cp_actual , NA) ,na.rm = T)
+            , OnEvalRaw = mean(ifelse(on_off == "1" , evalscore_raw , NA) , na.rm = T)
+            , OffEvalRaw = mean(ifelse(on_off == "0" , evalscore_raw , NA) , na.rm = T)
+            , Nagents = mean(nagent, na.rm = T)
+             , ABSgain = (mean(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T)) - (mean(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T)))
+
+cp_actual_quintile_off <- vacaEval %>%
+  filter(on_off == '0') %>%
+  mutate(cp_actual_bucket = floor(cp_actual*params$bucket)) %>%
+  group_by(cp_actual_bucket) %>%
+  summarize( Off_VA_Delta = (mean(ifelse(ap_actual > params$top , optimizationmetric , NA) ,na.rm = T) - mean(ifelse(ap_actual < (1-params$top) , optimizationmetric , NA) ,na.rm = T))
+             , Off_Calls_TopHalf = sum(ifelse(ap_actual > params$top, 1 , NA) ,na.rm = T)
+             , Off_Calls_BottomHalf = sum(ifelse(ap_actual < (1-params$top), 1 , NA) ,na.rm = T)
+)
+  cp_delta <- cp_actual_quintile %>%
+    left_join(cp_actual_quintile_off , by = 'cp_actual_bucket') %>%
+    select(cp_actual_bucket,VA_Delta,Calls_TopHalf,Calls_BottomHalf,Off_VA_Delta, Off_Calls_TopHalf , Off_Calls_BottomHalf
+           ,APDiff, Total_Calls, CR,on_AP,off_AP,on_CP, off_CP,OnEvalRaw, OffEvalRaw, Nagents, ABSgain )
+
+x <- round_off(cp_delta)
+# kable(x, 'html') %>% kable_styling(font_size = 12) %>% scroll_box(width = '800px')
+
+d <- kable(x, 'html') %>%
+  kable_styling(font_size = 12 , bootstrap_options = c("striped", "hover","bordered"), full_width = T)
+d
+}
+
+
+res <- lapply(optimizations, CP_stats)
+names(res) <- optimizations
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  print(res[[optimizations[i]]])
+  cat('\n', '<br>', '\n\n')
+  
+}
+```
+
+### AP Stats {.tabset .tabset-pills}
+
+```{r ap_quintile, warning= FALSE , echo= FALSE , message= FALSE, results='asis'}
+
+AP_stats <- function(opt_metric){
+  
+  vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+
+ap_actual_quintile <- vacaEval %>%
+  mutate(ap_actual_bucket = floor(ap_actual*params$bucket)) %>%
+  group_by(ap_actual_bucket) %>%
+  dplyr:: summarize( CPDiff = (mean(ifelse(on_off == '1', cp_actual , NA) ,na.rm = T) - mean(ifelse(on_off == '0', cp_actual , NA) ,na.rm = T))
+                     , Total_Calls = n()
+                     , CR = mean(optimizationmetric,na.rm = T)
+                     , on_CP = mean(ifelse(on_off == '1', cp_actual , NA) ,na.rm = T)
+                     , off_CP = mean(ifelse(on_off == '0', cp_actual , NA) ,na.rm = T)
+                     , on_AP = mean(ifelse(on_off == '1', ap_actual , NA) ,na.rm = T)
+                     , off_AP = mean(ifelse(on_off == '0', ap_actual , NA) ,na.rm = T)
+                     , OnEvalRaw = mean(ifelse(on_off == "1" , abs(cp_actual - ap_actual) , NA) , na.rm = T)
+                     , OffEvalRaw = mean(ifelse(on_off == "0" , abs(cp_actual - ap_actual) , NA) , na.rm = T)
+                     , Nagents = mean(nagent, na.rm = T)
+                     , ABSgain = (mean(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T)) - (mean(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T)))
+
+x <- round_off(ap_actual_quintile)
+# kable(x, 'html') %>% kable_styling(font_size = 12) %>% scroll_box(width = '800px')
+
+d <- kable(x, 'html') %>%
+  kable_styling(font_size = 12 , bootstrap_options = c("striped", "hover","bordered"), full_width = T)%>% scroll_box(width = '1200px')
+d
+}
+
+res <- lapply(optimizations, AP_stats)
+names(res) <- optimizations
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  print(res[[optimizations[i]]])
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+
+## Production Stats - Plots
+### AP {.tabset .tabset-pills}
+
+```{r AP_Stats, warning= FALSE , echo= FALSE , message= FALSE, results = 'asis'}
+AP_stats_plot <- function(opt_metric){
+  
+  vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+ap_actual_quintile <- vacaEval %>%
+  mutate(ap_bucket = floor(ap_actual*params$bucket)) %>%
+  group_by(ap_bucket) %>%
+  summarize( on_calls = sum(ifelse(on_off == '1' , 1,0)) , off_call = sum(ifelse(on_off == '0' , 1,0)) , on_CR = mean(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T) , off_CR = mean(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T) , on_Sale = sum(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T) , off_Sale = sum(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T), incrementals= (on_CR - off_CR)*on_calls , gain = incrementals*100/(on_Sale - incrementals)
+  )
+
+ap_loggedinpercentile_quintile <- vacaEval %>%
+  mutate(ap_bucket = floor(ap_loggedinpercentile*params$bucket)) %>%
+  group_by(ap_bucket) %>%
+  summarize( on_calls = sum(ifelse(on_off == '1' , 1,0)) , off_call = sum(ifelse(on_off == '0' , 1,0)) , on_CR_log = mean(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T) , off_CR_log = mean(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T) , on_Sale = sum(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T) , off_Sale = sum(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T), incrementals= (on_CR_log - off_CR_log)*on_calls , gain = incrementals*100/(on_Sale - incrementals)
+)
+
+ap_actual_quintile <- ap_actual_quintile %>%
+  left_join(ap_loggedinpercentile_quintile, by = 'ap_bucket') %>%
+  select(ap_bucket,on_CR,off_CR, on_CR_log, off_CR_log)
+
+
+x <- ggplot() +
+  ## first plot for on_CR
+  geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR, colour = 'On')) +
+  geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR, colour = 'On')) +
+  # second plot for off_CR
+  geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR, colour = 'OFF')) +
+  geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR, colour = 'OFF')) +
+## third plot for on_CR_log
+# geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR_log, colour = 'On_LoggedIn')) +
+#   geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR_log, colour = 'On_LoggedIn')) +
+  ## fourth plot for off_log
+  # geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR_log, colour = 'off_CR_log')) +
+  # geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR_log, colour = 'off_CR_log')) +
+  scale_color_manual(values = c('red','darkblue')) +
+  labs(x = 'Buckets', y = 'CR', title = 'Actual')
+
+a <- (x)
+
+x <- ggplot() +
+  ## first plot for on_CR
+  # geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR, colour = 'ON_CR')) +
+  # geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR, colour = 'ON_CR')) +
+  ## second plot for off_CR
+  # geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR, colour = 'OFF_Actual')) +
+  # geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR, colour = 'OFF_Actual')) +
+# third plot for on_CR_log
+geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR_log, colour = 'On')) +
+  geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=on_CR_log, colour = 'On')) +
+# fourth plot for off_log
+  geom_point(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR_log, colour = 'Off')) +
+  geom_line(data = ap_actual_quintile, aes(x=ap_bucket, y=off_CR_log, colour = 'Off')) +
+  scale_color_manual(values = c('red','darkblue')) +
+  labs(x = 'Buckets', y = 'CR', title = 'LoggedIn')
+
+b <- (x)
+return(list(a = a, b = b))
+}
+
+res <- lapply(optimizations, AP_stats_plot)
+names(res) <- optimizations
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  plot(res[[optimizations[i]]]$a)
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+
+
+### AP Loggedin {.tabset .tabset-pills}
+``` {r AP_loggedin, warning= FALSE , echo= FALSE , message= FALSE, results = "asis"}
+
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  plot(res[[optimizations[i]]]$b)
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+
+### AP Normalised {.tabset .tabset-pills}
+``` {r AP_Norm, warning= FALSE , echo= FALSE , message= FALSE, results = "asis"}
+
+AP_norm_plot <- function(opt_metric){
+vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+
+rpc_per_nf <- vacaEval %>%
+  filter(on_off == 0) %>%
+  select(nf, optimizationmetric) %>%
+  group_by(nf) %>%
+  summarise(cr = mean(optimizationmetric)) %>%
+  setorder(-cr)
+
+rpc_per_nf_qu <- vacaEval %>%
+  select(nf, optimizationmetric, ap_actual) %>%
+  mutate(AP_quintile = floor(params$bucket*ap_actual)) %>%
+  group_by(AP_quintile, nf) %>%
+  filter(!is.na(ap_actual)) %>%
+  summarise(cr_qu = mean(optimizationmetric), calls = n())%>%
+  setorder(-cr_qu)
+
+j <- merge(rpc_per_nf, rpc_per_nf_qu, by = 'nf')
+
+rpc_per_nf_norm <- j %>%
+  filter(cr != 0, calls > 10 )%>%
+  mutate(WCR = (cr_qu/abs(cr)) * calls)
+
+rpc_norm <- rpc_per_nf_norm %>%
+  group_by(AP_quintile)%>%
+  summarise(CR_norm = sum(WCR) * 1.0 / sum(calls), calls_normalised = sum(calls))
+
+x <- ggplot(data = rpc_norm , aes(x = AP_quintile , y = CR_norm)) +
+  geom_point() +
+  geom_line(color = 'red') +
+  labs(x = 'Buckets', y = 'CR_Norm', title = 'Normalized AP on CP decile')
+
+(x)
+
+}
+
+res <- lapply(optimizations, AP_norm_plot)
+names(res) <- optimizations
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  plot(res[[optimizations[i]]])
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+
+### CP MA {.tabset .tabset-pills}
+```{r CP_Stats, warning= FALSE , echo= FALSE , message= FALSE, results= 'asis'}
+
+CP_stats_plot <- function(opt_metric){
+  vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+
+  cp_actual_quintile <- vacaEval %>%
+    mutate(cp_actual_bucket = floor(cp_actual*params$bucket)) %>%
+    group_by(cp_actual_bucket) %>%
+    summarize( on_calls = sum(ifelse(on_off == '1' , 1,0)) , off_call = sum(ifelse(on_off == '0' , 1,0)) , on_CR = mean(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T) , off_CR = mean(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T) , on_Sale = sum(ifelse(on_off == '1', optimizationmetric , NA) ,na.rm = T) , off_Sale = sum(ifelse(on_off == '0', optimizationmetric , NA) ,na.rm = T), incrementals= (on_CR - off_CR)*on_calls , gain = incrementals*100/(on_Sale - incrementals)
+    )
+  x <- round_off(cp_actual_quintile)
+  x <- ggplot() +
+    ## first plot for on
+    geom_point(data = cp_actual_quintile, aes(x=cp_actual_bucket, y=on_CR, colour = 'ON')) +
+    geom_line(data = cp_actual_quintile, aes(x=cp_actual_bucket, y=on_CR, colour = 'ON')) +
+    ## Second plot for off
+    geom_point(data = cp_actual_quintile, aes(x=cp_actual_bucket, y=off_CR, colour = 'OFF')) +
+    geom_line(data = cp_actual_quintile, aes(x=cp_actual_bucket, y=off_CR, colour = 'OFF')) +
+    scale_color_manual(values = c('red','darkblue')) +
+    labs(x = 'Buckets', y = 'CR', title = 'CR')
+  
+  a <- (x)
+  
+  cp_actual_quintile_off <- vacaEval %>%
+    filter(on_off == '0') %>%
+    mutate(cp_actual_bucket = floor(cp_actual*params$bucket)) %>%
+    group_by(cp_actual_bucket) %>%
+    summarize( Off_VA_Delta = (mean(ifelse(ap_actual > params$top , optimizationmetric , NA) ,na.rm = T) - mean(ifelse(ap_actual < (1-params$top) , optimizationmetric , NA) ,na.rm = T))
+               , Off_Calls_TopHalf = sum(ifelse(ap_actual > params$top, 1 , NA) ,na.rm = T)
+               , Off_Calls_BottomHalf = sum(ifelse(ap_actual < (1-params$top), 1 , NA) ,na.rm = T)
+  )
+    cp_delta <- cp_actual_quintile %>%
+      left_join(cp_actual_quintile_off , by = 'cp_actual_bucket') %>%
+      select(cp_actual_bucket,Off_VA_Delta, Off_Calls_TopHalf , Off_Calls_BottomHalf )
+  
+  cp_delta <- round_off(cp_delta)
+  
+  
+  x <- ggplot() +
+    ## first plot for on
+    geom_point(data = cp_delta, aes(x=cp_actual_bucket, y=Off_VA_Delta, colour = 'Off_VA')) +
+    geom_line(data = cp_delta, aes(x=cp_actual_bucket, y=Off_VA_Delta, colour = 'Off_VA')) +
+    scale_color_manual(values = c('darkgreen')) +
+    labs(x = 'Buckets', y = 'CR', title = ' Delta ')
+  
+  b <- (x)
+  return(list(a = a, b = b))
+}
+
+res <- lapply(optimizations, CP_stats_plot)
+names(res) <- optimizations
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  print(res[[optimizations[i]]]$a)
+  cat('\n', '<br>', '\n\n')
+  
+}
+```
+
+### CP VA {.tabset .tabset-pills}
+```{r CP_Stats_2, warning= FALSE , echo= FALSE , message= FALSE, results= 'asis'}
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  print(res[[optimizations[i]]]$b)
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+
+
+
+## Gain by DiffGroup
+```{r gainByEval, warning= FALSE , echo= FALSE , message= FALSE, include = FALSE}
+
+gainbydg <- function(opt_metric){
+  vacaEval <- vacaEval %>% mutate_(optimizationmetric = opt_metric)
+
+gainbyeval <- data.frame(evalscore = vacaEval$evalscore_raw,
+                         cq = floor(vacaEval$cp_actual * params$bucket),
+                         aq = floor(vacaEval$ap_actual * params$bucket),
+                         opt = vacaEval$optimizationmetric,
+                         on_off = vacaEval$on_off,
+                         evalint = floor(vacaEval$evalscore_raw * 100))
+
+
+agentquality <- gainbyeval%>%filter(on_off == 0) %>% group_by(aq) %>% summarise(AgentQuality = mean(opt))
+callerquality <- gainbyeval%>%filter(on_off == 0)  %>% group_by(cq) %>% summarise(CallerQuality = mean(opt))
+
+gainbyeval1 <- merge(x=gainbyeval , y=agentquality ,by.x = "aq", by.y = "aq" )
+gainbyeval2 <- merge(x=gainbyeval1 , y=callerquality , by.x = "cq" , by.y = "cq") #At this point you have agent and call quality on each call
+gainbyevaloff <- gainbyeval2 %>% filter(on_off == 0)
+
+dg <- max(gainbyeval2$evalint)             #Max Diffgroup
+basecr = mean(gainbyeval2$opt)            #on+offCR at Max DG
+baseaq = mean(gainbyeval2$AgentQuality)   #on+off AgentQuality at Max DG
+basecq = mean(gainbyeval2$CallerQuality)  #on+off Callquality at Max DG
+baseoffcalls = sum(as.integer(!gainbyeval2$on_off)) #Off Calls at Max DG
+baseoncalls = sum(gainbyeval2$on_off)     #On calls at Max DG
+
+dgoff <- max(gainbyevaloff$evalint)             #Max Diffgroup
+basecroff = mean(gainbyevaloff$opt)            #offCR at Max DG
+baseaqoff = mean(gainbyevaloff$AgentQuality)   #off AgentQuality at Max DG
+basecqoff = mean(gainbyevaloff$CallerQuality)  #off Callquality at Max DG
+
+gainbydg <- data.frame(
+  diffgroup = dg ,CR = basecr, unadjgain =  0 ,apcorrection = 0 ,cpcorrection =0, adjustedgain=0 , On=1 , Off=1
+)
+gainbydgoff <- data.frame(
+  diffgroup = dgoff ,CR = basecroff, unadjgain =  0 ,apcorrection = 0 ,cpcorrection =0, adjustedgain=0
+)
+
+for(i in 1:dg){
+  dgtemp <- dg - i
+
+  temp <- gainbyeval2 %>% filter(evalint <= dgtemp ) %>% summarise(diffgroup = max(evalint),CR = mean(opt),
+                                                                   unadjgain = (mean(opt)-basecr)
+                                                                   , apcorrection = (mean(AgentQuality)-baseaq), cpcorrection = (mean(CallerQuality)-basecq),
+                                                                   adjustedgain = (mean(opt)-basecr) - (mean(AgentQuality)-baseaq)  - (mean(CallerQuality)-basecq)
+                                                                   , On = sum(on_off)/baseoncalls, Off = sum(as.integer(!on_off))/baseoffcalls
+  )
+
+  tempoff <- gainbyevaloff %>% filter(evalint <= dgtemp) %>% summarise(diffgroup = max(evalint),CR = mean(opt),unadjgain = (mean(opt)-basecroff)
+                                                                       , apcorrection = (mean(AgentQuality)-baseaqoff) , cpcorrection = (mean(CallerQuality)-basecqoff),
+                                                                       adjustedgain = (mean(opt)-basecroff) - (mean(AgentQuality)-baseaqoff) - (mean(CallerQuality)-basecqoff)
+  )
+
+  gainbydg <- rbind(gainbydg , temp)
+  gainbydgoff <- rbind(gainbydgoff , tempoff)
+
+  temp <- data.frame();
+  tempoff <- data.frame();
+}
+x <- ggplot(gainbydg, aes(x = diffgroup)) +
+  geom_line(aes(y = apcorrection, colour ="apcorrection")) +
+  geom_line(aes(y = cpcorrection, colour = "cpcorrection"))+
+  geom_line(aes(y = unadjgain, colour = "unadjgain"))+
+  geom_line(aes(y = adjustedgain, colour = "adjustedgain"))+
+  scale_color_manual(values=c("orange" , "#7faef9", "black" , "green"))+
+  ylab( "Gain")+
+  labs(colour = "legend")+
+  ggtitle("On + Off")
+
+y <- ggplot(gainbydgoff, aes(x = diffgroup)) +
+  geom_line(aes(y = apcorrection, colour ="apcorrection")) +
+  geom_line(aes(y = cpcorrection, colour = "cpcorrection"))+
+  geom_line(aes(y = unadjgain, colour = "unadjgain"))+
+  geom_line(aes(y = adjustedgain, colour = "adjustedgain"))+
+  scale_color_manual(values=c("orange" , "#7faef9", "black" , "green"))+
+  ylab( "Gain")+
+  labs(colour = "legend")+
+  ggtitle("Off")
+
+ return(list(a = x, b = y))
+}
+
+res <- lapply(optimizations, gainbydg)
+names(res) <- optimizations
+
+```
+
+### Gain by Diffgroup ON+OFF {.tabset .tabset-pills}
+```{r plotGainByEval_1, warning= FALSE , echo= FALSE , message= FALSE, results = "asis"}
+
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  plot(res[[optimizations[i]]]$a)
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+
+### Gain by Diffgroup OFF {.tabset .tabset-pills}
+```{r plotGainByEval_2, warning= FALSE , echo= FALSE , message= FALSE, results = "asis"}
+
+for(i in 1:length(res)) {
+  cat("####", params$optimizationmetric[i], '<br>', '\n')
+  plot(res[[optimizations[i]]]$b)
+  cat('\n', '<br>', '\n\n')
+  
+}
+
+```
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
