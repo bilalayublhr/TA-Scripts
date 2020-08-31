@@ -1,3 +1,4 @@
+#
 library(data.table)
 library(easy.db.query)
 ap <- "select agentid, percentile, generatedon
