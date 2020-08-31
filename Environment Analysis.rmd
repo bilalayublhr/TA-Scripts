@@ -1,0 +1,218 @@
+---
+title: "EnvironmentAnalysis"
+output: 
+  html_document:
+    df_print: paged
+---
+
+
+
+
+```{r load-libraries, include=FALSE}
+library(easy.db.query)
+library(data.table)
+library(lubridate)
+library(janitor)
+library(ggplot2)
+library(pheatmap)
+library(stringr)
+library(dplyr)
+library(parallel)
+
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r load-data, echo=FALSE, include=FALSE}
+library(easy.db.query)
+library(data.table)
+library(lubridate)
+library(janitor)
+library(ggplot2)
+library(pheatmap)
+library(stringr)
+library(dplyr)
+library(parallel)
+library(plotly)
+
+# 
+# time_grouping <- "year"
+# 
+# sme[, date := lubridate::date(calltime)]
+# 
+# if(tolower(time_grouping) == 'month'){
+#   sme[, time_grouped := format(date, "%Y-%m")]
+# } else if(tolower(time_grouping) == 'year'){
+#   sme[, time_grouped := format(date, "%Y")]
+# } else if(tolower(time_grouping) == 'week'){
+#   sme[, time_grouped := format(date, format = "%Y-%V")]
+# } else{
+#   sme[, time_grouped := format(date, "%Y-%m-%d")]
+# }
+# 
+
+date_vector <- seq(as.Date("2020-04-01"), as.Date("2020-07-29"), by="days")
+
+query <- "select '%s' as date, calltime, on_off, agentid, evalalgoused,nagents,ncalls, 
+          nagents_used, ncalls_used, area 
+          from `bskybinternal.vevaluatorlog`  a
+          where calltime between '%s' and '%s'
+          and Area = 'Platform Classic'"
+
+ecl_query <- "select '%s' as date, agentid, area, actualvdn, answtime, WrapEndTime
+          from `bskybinternal.vecl`  a
+          where calltime between '%s' and '%s'
+          and successful = 1"
+
+TA_Agents <- run_query("select distinct agentid
+                       from `bskybsme`.`ptf_agentskillmapping_table` 
+                       where site in ('glasgow', 'uddingston');", "arch_bskybsme" ) 
+
+loaddata_parr <- function( startdate, query){
+  enddate <- startdate + 1 
+  query <- sprintf(query, startdate, startdate, enddate)
+  return(run_query(query, "arch"))
+}
+
+
+dat <- mclapply(date_vector, loaddata_parr, query, mc.cores = 20L)
+df <- rbindlist(dat)
+
+
+ecl <- mclapply(date_vector, loaddata_parr, ecl_query, mc.cores = 20L)
+df_ecl <- rbindlist(ecl)
+
+setDT(df)
+setDT(df_ecl)
+setDT(TA_Agents)
+
+Eval_TA = df[area == 'Platform Classic']
+Ecl_All = df_ecl
+
+df1 <- Eval_TA[, .(Calls_Count = .N), by = (date)]
+ggplot(data = df1, aes(x = date, y = Calls_Count)) + geom_bar(stat = "identity")
+
+
+df2 <- Eval_TA[, .(Agent_Count = length(unique(agentid))), by = (date)]
+ggplot(data = df2, aes(x = date, y = Agent_Count)) + geom_bar(stat = "identity")
+
+df3 <- Eval_TA[, L2 := case_when(evalalgoused %like% 'L2' ~ 1, TRUE ~ 0)][, .('L2_%age' = mean(L2)*100), by = date]
+ggplot(data = df3, aes(x = date, y = `L2_%age`)) + geom_bar(stat = "identity")
+
+df4 <- Eval_TA[, '1to1_Raw' := case_when((nagents*ncalls == 1) ~ 1, TRUE ~ 0)][, .('1to1_Raw_%age' = mean(`1to1_Raw`)*100), by = date]
+ggplot(data = df4, aes(x = date, y = `1to1_Raw_%age`)) + geom_bar(stat = "identity")
+
+df5 <- Eval_TA[as.numeric(on_off) == 1][, '1to1_Used' := case_when(nagents_used*ncalls_used == 1 ~ 1, TRUE ~ 0)][, .('1to1_Used_%age' = mean(`1to1_Used`)*100), by = date]
+ggplot(data = df5, aes(x = date, y = `1to1_Used_%age`)) + geom_bar(stat = "identity")
+
+
+d6 <- Eval_TA[on_off == 1][, `:=`(dt = date(calltime), hr = hour(calltime))]
+d7 <- d6[, .(Mean_Choice = as.integer(mean(nagents_used*ncalls_used)), Median_Choice = as.double(median(nagents_used*ncalls_used)), calls = .N), by = .(dt, hr)]
+
+calls_matrix <- dcast(d7, dt ~ hr, value.var = "calls")
+mean_matrix <- dcast(d7, dt ~ hr, value.var = "Mean_Choice")
+median_matrix <- dcast(d7, dt ~ hr, value.var = "Median_Choice")
+
+
+
+rownames(median_matrix) = median_matrix$dt
+median_matrix$dt = NULL
+median_matrix <- data.matrix(median_matrix, rownames.force = NA)
+
+
+e <- pheatmap(median_matrix ,  cluster_rows = FALSE, cluster_cols = FALSE , show_colnames = T, show_rownames = T, display_numbers = TRUE , color = colorRampPalette(c("red", "yellow", "green", "orange"))(n = 29) 
+              , fontsize_number = 11
+              , border_color = "black"  , angle_col = 90)
+
+
+calls_matrix <- calls_matrix %>% adorn_percentages("row") %>% adorn_pct_formatting()
+calls_matrix <- calls_matrix %>% mutate_all(str_replace_all, "%", "")
+rownames(calls_matrix) = calls_matrix$dt
+calls_matrix$dt = NULL
+calls_matrix <- data.matrix(calls_matrix)
+
+
+f <- pheatmap(calls_matrix ,  cluster_rows = FALSE, cluster_cols = FALSE , show_colnames = T, show_rownames = T, display_numbers = TRUE , color = colorRampPalette(c("red", "yellow", "green", "orange"))(n = 29) 
+              , fontsize_number = 11
+              , border_color = "black"  , angle_col = 90)
+ 
+
+TA_Agents_ECL <- Ecl_All[agentid %in% TA_Agents$agentid]
+TA_Agents_ECL_Groupby <- TA_Agents_ECL[, Area_Custom := case_when(
+                                                   area %in% "Access" ~ "Service", area %in% "OrderRec" ~ "Service",
+                                                   area %in% "Case" ~ "Service", area %in% "MySkyTech" ~ "Service",
+                                                   area %in% "Billing" ~ "Service", area %in% "SkyQBBP" ~ "Service",
+                                                   area %in% "Direct" ~ "Service", area %in% "SkyQTV" ~ "Service",
+                                                   area %in% "Global" ~ "Service", area %in% "TVTech" ~ "Service",
+                                                   area %like% "upgrades" ~ "Upgrades", 
+                                                   area %like% "salwin" ~ "Winback",
+                                                   TRUE ~ area)][, .(Calls = .N, Agents_Counts = length(unique(agentid))), by = .(date, Area_Custom)]
+
+Area <- c("Platform Classic", "Value Classic", "Winback", "Service", "Mobile", "UpgradesCombined", "UpgradesDiamond")
+TA_Agents_ECL_Groupby <- TA_Agents_ECL_Groupby[(Area_Custom %in% Area)]
+
+ggplotly(ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
+    geom_bar(stat='identity')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90)))
+
+ggplotly(ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
+  geom_bar(stat='identity', position = 'fill')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90)))
+
+
+
+
+```
+
+```{r Calls_Counts, fig.height=15, fig.width=20}
+ggplot(data = df1, aes(x = date, y = Calls_Count)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+
+```
+
+```{r Agents_Counts, fig.height=15, fig.width=20}
+ggplot(data = df2, aes(x = date, y = Agent_Count)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+
+```
+
+
+```{r L2_Percentage, fig.height=15, fig.width=10}
+ggplot(data = df3, aes(x = date, y = `L2_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+
+```
+
+```{r One_to_One_Raw, fig.height=15, fig.width=20}
+ggplot(data = df4, aes(x = date, y = `1to1_Raw_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+
+```
+
+```{r One_to_One_Used, fig.height=15, fig.width=20}
+ggplot(data = df5, aes(x = date, y = `1to1_Used_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+
+```
+
+```{r Call Volume Distribution, fig.height=20, fig.width=20}
+e <- pheatmap(median_matrix ,  cluster_rows = FALSE, cluster_cols = FALSE , show_colnames = T, show_rownames = T, display_numbers = TRUE , main="Call Volume Distribution Hour Wise" , color = colorRampPalette(c("red", "yellow", "green", "orange"))(n = 29) 
+              , fontsize_number = 11
+              , border_color = "black"  , angle_col = 90)
+```
+
+```{r Median Choice Distribution, fig.height=20, fig.width=20}
+f <- pheatmap(calls_matrix ,  cluster_rows = FALSE, cluster_cols = FALSE , show_colnames = T, show_rownames = T, display_numbers = TRUE ,main="Median Choice Distribution Hour Wise" , color = colorRampPalette(c("red", "yellow", "green", "orange"))(n = 29) 
+              , fontsize_number = 20
+              , border_color = "black"  , angle_col = 90)
+              
+```
+
+
+```{r TA Agents Calls Distribution Area Wise - Actual, fig.height=15, fig.width=20}
+ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
+    geom_bar(stat='identity')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))+ ggtitle("TA Agents Calls Distribution Area Wise - Actual")
+
+```
+
+```{r TA Agents Calls Distribution Area Wise - Percentage, fig.height=15, fig.width=20}
+ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
+  geom_bar(stat='identity', position = 'fill')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))+ ggtitle("TA Agents Calls Distribution Area Wise - Proportion")
