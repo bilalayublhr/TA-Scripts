@@ -1,0 +1,89 @@
+select max(callstarttime) from bskybsatmap.`bskybinternal.aca`;
+
+set @startdate =date_sub(curdate() , interval 1 day);
+set @enddate = now(); 
+
+####################### SERVICE ##############################
+select CAST(callstarttime as date) Day 
+            ,'service' as area
+			,COUNT(*) Calls
+			, SUM(CASE WHEN on_off = 0 THEN 1 END) OffCalls
+			, SUM(CASE WHEN on_off = 1 THEN 1 END) OnCalls
+			, (IFNULL((SUM(CASE WHEN on_off = 1 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 1 THEN 1 END)),0)/(NULLIF((SUM(CASE WHEN on_off = 0 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 0 THEN 1 END)),0)) - 1)*100.0 RevenueGain
+			, (IFNULL(SUM(CASE WHEN on_off = 1 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 1 THEN 1 END),0) - IFNULL(SUM(CASE WHEN on_off = 0 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 0 THEN 1 END),0) ) * SUM(CASE WHEN on_off = 1 THEN 1 END) RevenueIncrementals 
+from `skyservice.vaca` 
+where isrelevant = 1
+and callstarttime >= @startdate
+and callstarttime < @enddate
+group by 1,2;
+
+##################### UPGRADES & VALUE ##################################
+
+select 		
+			CAST(callstarttime as date) Day 
+			,customgroup,COUNT(*) Calls
+			,max(callstarttime)
+			, SUM(CASE WHEN on_off = 0 THEN 1 END) OffCalls
+			, SUM(CASE WHEN on_off = 1 THEN 1 END) OnCalls
+			, (IFNULL((SUM(CASE WHEN on_off = 1 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 1 THEN 1 END)),0)/(NULLIF((SUM(CASE WHEN on_off = 0 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 0 THEN 1 END)),0)) - 1)*(Case when customgroup='upgrades classic' then 100.0 else -100.0 end) RevenueGain
+			, (IFNULL(SUM(CASE WHEN on_off = 1 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 1 THEN 1 END),0) - IFNULL(SUM(CASE WHEN on_off = 0 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 0 THEN 1 END),0) ) * SUM(CASE WHEN on_off = 1 THEN 1 END) RevenueIncrementals 			
+from `bskybinternal.vaca`
+where callstarttime >= @startdate
+and callstarttime < @enddate 
+and isrelevant = 1
+and customgroup in('value classic','upgrades classic')
+group by 1,2
+order by 2,1;
+
+################## UPGRADES MAIN & SINGLE ##############################
+
+select 	
+			CAST(callstarttime as date) Day 
+			,case when Competency like '%Diamond%' then 'Diamond' else 'Combined' end UPG_modeltype
+            ,COUNT(*) Calls
+			,max(callstarttime)
+			, SUM(CASE WHEN on_off = 0 THEN 1 END) OffCalls
+			, SUM(CASE WHEN on_off = 1 THEN 1 END) OnCalls
+			, (IFNULL((SUM(CASE WHEN on_off = 1 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 1 THEN 1 END)),0)/(NULLIF((SUM(CASE WHEN on_off = 0 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 0 THEN 1 END)),0)) - 1)*(Case when customgroup='upgrades classic' then 100.0 else -100.0 end) RevenueGain
+			, (IFNULL(SUM(CASE WHEN on_off = 1 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 1 THEN 1 END),0) - IFNULL(SUM(CASE WHEN on_off = 0 THEN Revenue END)*1.0/SUM(CASE WHEN on_off = 0 THEN 1 END),0) ) * SUM(CASE WHEN on_off = 1 THEN 1 END) RevenueIncrementals 			
+from `bskybinternal.vaca` 
+where isrelevant = 1
+and callstarttime >= @startdate
+and callstarttime < @enddate
+and customgroup in('upgrades classic')
+group by 1,2
+order by 1,2;
+
+
+############################## PLATFORM #######################################
+
+select date(callstarttime) date,
+'Platform' as area
+,count(*) Calls
+,ifnull((sum(case when dtv >=0 and on_off = 1 then 1 else 0 end)/sum(case when on_off = 1 then 1 else 0 end) - sum(case when dtv >=0 and on_off = 0 then 1 else 0 end)/sum(case when on_off = 0 then 1 else 0 end)) * sum(case when on_off = 1 then 1 else 0 end),0)  Incremental
+,(sum(case when dtv >=0 and on_off = 1 then 1 else 0 end)/sum(case when on_off = 1 then 1 else 0 end) - sum(case when dtv >=0 and on_off = 0 then 1 else 0 end)/sum(case when on_off = 0 then 1 else 0 end))*100 AbsGain
+from `bskybinternal.vaca` 
+where callstarttime >= @startdate
+and callstarttime < @enddate
+and customgroup = 'platform classic' and on_off is not null
+group by 1;
+
+############################ VDN Corrected Gain ##################################
+
+select date , sum(incremental)*100.0/sum(oncalls) VDNCorrectedGain from (
+select date(callstarttime) date,
+VQ_SCT,
+'Platform' as area
+,count(*) Calls
+,ifnull((sum(case when dtv >=0 and on_off = 1 then 1 else 0 end)/sum(case when on_off = 1 then 1 else 0 end) - sum(case when dtv >=0 and on_off = 0 then 1 else 0 end)/sum(case when on_off = 0 then 1 else 0 end)) * sum(case when on_off = 1 then 1 else 0 end),0)  Incremental
+,(sum(case when dtv >=0 and on_off = 1 then 1 else 0 end)/sum(case when on_off = 1 then 1 else 0 end) - sum(case when dtv >=0 and on_off = 0 then 1 else 0 end)/sum(case when on_off = 0 then 1 else 0 end))*100 AbsGain,
+sum(on_off) as oncalls
+from `bskybinternal.vaca` 
+where callstarttime >= @startdate
+and callstarttime < @enddate
+and customgroup = 'platform classic' and on_off is not null
+group by 1,2) a 
+group by 1 ;
+
+
+
