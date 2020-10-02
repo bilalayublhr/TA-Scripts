@@ -1,0 +1,143 @@
+---
+title: "Uddingston Winback Agents"
+output:
+  html_document:
+    df_print: paged
+---
+
+This document is meant to give a quick overview of routing / performance of the c.200 Uddingston Winback Agents that are now shared between Winback and Turnaround
+
+```{r load-libraries, include=FALSE}
+library(plotly)
+library(stringr)
+library(data.table)
+library(easy.db.query)
+library(parallel)
+library(kableExtra)
+library(ggplot2)
+```
+
+```{r load-agents, echo=FALSE}
+agents <- c("zal77", "hmd03", "kpl78", "als09", "gme85", "lem77", "mmo64" , "acm60", "amc70", "dha18", "mhu98", "lby61", "egl01", "nca96" , "lms04", "awd02", "mam35", "mic39", "jfr28", "nim10", "kew06" , "jaw21", "kas10", "stm82", "hoc02", "liw11", "zob02", "mic26" , "jec20", "nib13", "moa21", "teg02", "loh05", "dew13", "anc43" , "mib45", "ser06", "lib18", "rem19", "cas23", "sha13", "tsh10" , "sij07", "rke09", "lro18", "dwi21", "efo06", "pta07", "bca24" , "lco32", "kdo06", "sfa09", "kgu05", "pha40", "vfa01", "ame37" , "rmo22", "emc68", "naq02", "afi05", "hla07", "eca11", "gha14" , "asi28", "rbo12", "dmo28", "gki07", "ihe02", "jgr46", "hmi13" , "lso03", "ahe26", "lla16", "nma38", "she30", "jra29", "mom17" , "rmc61", "dem34", "stt31", "cca47", "lmu20", "ksh22", "dml02" , "mke45", "vwo03", "smo70", "jdo31", "npe13", "gco29", "cca54" , "pdo24", "hna06", "jcr39", "rki14", "pgo10", "kir15", "lwr06" , "tmc43", "smr17", "mca72", "rfo22", "cca67", "ibr10", "aml14" , "cgr41", "dwa42", "wki03", "nho20", "gon04", "rme21", "amu54" , "kpa39", "kco29", "mgr68", "ane39", "lco80", "lam77", "nbo13" , "gmc82", "amb23", "mbr79", "ear03", "zda03", "kbl13", "pgr35" , "meh16", "ake61", "rgr53", "anw60", "amy27", "amm62", "eim02" , "sbu60", "elm22", "nsh41", "dda68", "cle51", "mmi74", "lst62" , "dpa73", "rae09", "rhi14", "bcu09", "pgr37", "tcs02", "cme36" , "jkn12", "sbo61", "rmy05", "csd02", "bmy02", "cse15", "grk04" , "aby14", "gke29", "amy34", "dmn18", "lpk02", "rci01", "mhn20" , "ssd07", "kry06", "lre22", "gpk01", "rsy03", "dsk09", "eho36" , "jwn17", "mgn06", "jht10", "fcr05", "dks02", "dle44", "csw13" , "ace13", "aao10", "kwd07", "pme12", "kdp02", "wse05", "gmn14" , "dcn10", "bcn03", "mdy13", "bme26", "reg07", "gbb01", "rmg05" , "mme70", "smm18", "ddy14") 
+
+cat(sprintf("Number of Uddingston Winback agents loaded : %s", length(agents)))
+```
+
+```{r load-data, echo=FALSE, include=FALSE}
+loaddata_parr <- function( startdate, query, con){
+  enddate <- startdate + 1 
+  query <- sprintf(query, startdate, startdate, enddate)
+  return(run_query(query, con))
+}
+
+date_vector <- seq(as.Date("2020-05-01"), as.Date(Sys.Date()), by="days")
+
+
+aca_wback_query <- "select '%s' as date, agentid as actualagentid, employeeid as agentid, (dtv >= 0) issavedtv, (salesmatched > 0) salesmatchedfilter, on_off, skillgroup skill, vq_sct vdn_bskyb, area from
+`bskybinternal.aca`
+where callstarttime between '%s' and '%s'
+ "
+dat <- mclapply(date_vector, loaddata_parr, aca_wback_query, "arch", mc.cores = 20L)
+aca_wback <- rbindlist(dat)
+aca_wback <- aca_wback[vdn_bskyb %like% 'SALWIN' | area == 'Platform Classic']
+aca_wback[vdn_bskyb %like% 'SALWIN', area := "Winback"]
+
+
+
+agentlog_query <- "select '%s' as date, hour(eventtime) hour,  agentid, eventtime, eventtype, skill 
+from `engine.agentlog`
+where eventtime between '%s' and '%s' and eventtype = 'skilllogin'"
+  
+dat <- mclapply(date_vector, loaddata_parr, agentlog_query, "arch", mc.cores = 20L)
+agentlog <- rbindlist(dat)
+
+agentattributes_query <- "select * from `engine.agentattributes`"
+agentattributes <- run_query(agentattributes_query, "arch")
+
+#setDT(sme)
+setDT(agentlog)
+setDT(agentattributes)
+setDT(aca_wback)
+
+agent.map.ptf <- aca_wback[area == 'Platform Classic' & !is.na(on_off),.(calls = .N), by = .(agentid, actualagentid)][, ptf := 1]
+agent.map.uwin <- aca_wback[actualagentid %in% agents, .(calls = .N) , by = .(agentid, actualagentid)][, udd_win := 1]
+  # setDT(read.csv("~/notebooks/Uddingston_Wback.csv"))
+agent.map.uwin[, `:=`(agentid = as.character(agentid), actualagentid = as.character(actualagentid))]
+```
+
+
+```{r process-data, echo = FALSE}
+agentlog1 <- merge(agentlog, agent.map.uwin, by = "agentid", all.x = T)[is.na(udd_win), udd_win := 0]
+agentlog1 <- merge(agentlog1, agent.map.ptf, by = c( "agentid"), all.x = T)[is.na(ptf), ptf := 0]
+
+aca_wback[actualagentid %in% agent.map.ptf$actualagentid, ptf := 1]
+aca_wback[! (actualagentid %in% agent.map.ptf$actualagentid), ptf := 0]
+aca_wback[actualagentid %in% agents, udd_win := 1]
+aca_wback[! (actualagentid %in% agents), udd_win := 0]
+
+if(nrow(agentlog1) == nrow(agentlog)){
+  agentlog <- agentlog1[ptf == 1 | udd_win == 1]
+}else{
+  stop("ERROR | Duplicated induced in agentlog")
+}
+```
+
+1) Daywise Skillwise Agent logins for Uddingston Winback Agents
+```{r UDD_plot1_daywise_skillwise_agentlogin, fig.height=8, fig.width=10}
+
+# d1 <- agentlog[udd_win == 1,.(agents = length(unique(agentid))) , by = .(date, hour, skill)]
+# ggplotly(ggplot(d1, aes(x = hour, y = agents, color = skill, fill = skill))+
+#   geom_line(stat = "identity")+
+#   theme(axis.text.x = element_text(angle = 90))+ facet_wrap(~date))
+
+
+d1 <- agentlog[udd_win == 1,.(agents = length(unique(agentid))) , by = .(date, hour, skill)]
+ggplotly(ggplot(d1, aes(x = hour, y = agents, fill = skill))+
+           geom_bar(stat = "identity", position = "fill")+
+           theme(axis.text.x = element_text(angle = 90))+ facet_wrap(~date))
+
+```
+
+
+2) Daywise AreaWise Calls for Uddingston Winback Agents
+```{r UDD_plot2_daywise_areawise_calls, fig.height=8, fig.width=10}
+
+d2 <- aca_wback[udd_win == 1,.(calls = .N) , by = .(date, area)]
+ggplotly(ggplot(d2, aes(x = date, y = calls, fill = area))+
+  geom_bar(stat = "identity")+
+  theme(axis.text.x = element_text(angle = 90)))
+
+```
+
+3) Daywise AgentCounts for Uddingston Winback Agents
+```{r UDD_plot3_daywise_agentcounts, fig.height=8, fig.width=10}
+
+d3 <- aca_wback[udd_win == 1,.(agents = length(unique(actualagentid))) , by = .(date)]
+ggplotly(ggplot(d3, aes(x = date, y = agents))+
+  geom_line(group = 1)+ geom_point()+
+  theme(axis.text.x = element_text(angle = 90)))
+
+```
+4) Daywise Avg calls per agent on TA vs Winback
+```{r UDD_plot4_daywise_avgcalls_per_agent, fig.height=8, fig.width=10}
+
+d4 <- aca_wback[udd_win == 1,.(calls = .N) , by = .(date,area,actualagentid)]
+d4 <- d4[,.(avg.calls = mean(calls)), by = .(date, area)]
+ggplotly(ggplot(d4, aes(x = date, y = avg.calls, group = area, color = area))+
+  geom_line()+ geom_point()+
+  theme(axis.text.x = element_text(angle = 90)))
+
+```
+
+5) Daywise Avg TA calls per agent Uddwinback vs Normal TA Agent
+```{r UDD_plot5_daywise_avgTAcalls_per_agents, fig.height=8, fig.width=10}
+
+d5 <- aca_wback[area == 'Platform Classic',.(calls = .N) , by = .(date,uddwinback_agent = as.factor(udd_win),actualagentid)]
+d5 <- d5[,.(avg.calls = mean(calls)), by = .(date, uddwinback_agent)]
+levels(d5$uddwinback_agent) <- c("Not UDDWinback", "UDDWinback")
+ggplotly(ggplot(d5, aes(x = date, y = avg.calls, group = uddwinback_agent, color = uddwinback_agent))+
+  geom_line()+ geom_point()+
+  theme(axis.text.x = element_text(angle = 90)))
+
+```
+
