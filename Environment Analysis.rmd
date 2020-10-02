@@ -56,9 +56,9 @@ library(plotly)
 # }
 # 
 
-date_vector <- seq(as.Date("2020-04-01"), as.Date("2020-07-29"), by="days")
+date_vector <- seq(as.Date("2020-09-01"), as.Date("2020-09-28"), by="days")
 
-query <- "select '%s' as date, calltime, on_off, agentid, evalalgoused,nagents,ncalls, 
+query <- "select '%s' as date, calltime, on_off, agentid, evalalgoused,nagents,ncalls, errorreason, 
           nagents_used, ncalls_used, area 
           from `bskybinternal.vevaluatorlog`  a
           where calltime between '%s' and '%s'
@@ -163,39 +163,44 @@ ggplotly(ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = re
   geom_bar(stat='identity', position = 'fill')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90)))
 
 
+df22 <- Eval_TA[on_off == 1, agent_sla := case_when(errorreason %like% 'AGENT_SLA_BLOWN' ~ 1, TRUE ~ 0)][, .('Agent_SLABlowns_%age' = mean(agent_sla)*100), by = date]
 
 
-```
+df23 <- Eval_TA[, call_sla := case_when(errorreason %like% 'CALL_SLA_BLOWN' ~ 1, TRUE ~ 0)][, .('Call_SLABlowns_%age' = mean(call_sla)*100), by = date]
 
-```{r Calls_Counts, fig.height=15, fig.width=20}
-ggplot(data = df1, aes(x = date, y = Calls_Count)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
 
-```
-
-```{r Agents_Counts, fig.height=15, fig.width=20}
-ggplot(data = df2, aes(x = date, y = Agent_Count)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
 
 ```
 
-
-```{r L2_Percentage, fig.height=15, fig.width=10}
-ggplot(data = df3, aes(x = date, y = `L2_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
-
-```
-
-```{r One_to_One_Raw, fig.height=15, fig.width=20}
-ggplot(data = df4, aes(x = date, y = `1to1_Raw_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+```{r Calls_Counts, fig.height=5, fig.width=10}
+ggplot(data = df1, aes(x = date, y = Calls_Count)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))
 
 ```
 
-```{r One_to_One_Used, fig.height=15, fig.width=20}
-ggplot(data = df5, aes(x = date, y = `1to1_Used_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))
+```{r Agents_Counts, fig.height=5, fig.width=10}
+ggplot(data = df2, aes(x = date, y = Agent_Count)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))
+
+```
+
+
+```{r L2_Percentage, fig.height=5, fig.width=10}
+ggplot(data = df3, aes(x = date, y = `L2_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))
+
+```
+
+```{r One_to_One_Raw, fig.height=5, fig.width=10}
+ggplot(data = df4, aes(x = date, y = `1to1_Raw_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))
+
+```
+
+```{r One_to_One_Used, fig.height=5, fig.width=10}
+ggplot(data = df5, aes(x = date, y = `1to1_Used_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))
 
 ```
 
 ```{r Call Volume Distribution, fig.height=20, fig.width=20}
 e <- pheatmap(median_matrix ,  cluster_rows = FALSE, cluster_cols = FALSE , show_colnames = T, show_rownames = T, display_numbers = TRUE , main="Call Volume Distribution Hour Wise" , color = colorRampPalette(c("red", "yellow", "green", "orange"))(n = 29) 
-              , fontsize_number = 11
+              , fontsize_number = 20
               , border_color = "black"  , angle_col = 90)
 ```
 
@@ -207,12 +212,33 @@ f <- pheatmap(calls_matrix ,  cluster_rows = FALSE, cluster_cols = FALSE , show_
 ```
 
 
-```{r TA Agents Calls Distribution Area Wise - Actual, fig.height=15, fig.width=20}
-ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
-    geom_bar(stat='identity')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))+ ggtitle("TA Agents Calls Distribution Area Wise - Actual")
+```{r TA Agents Calls Distribution Area Wise - Actual, fig.height=5, fig.width=10}
+ggplotly(ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
+    geom_bar(stat='identity')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))+ ggtitle("TA Agents Calls Distribution Area Wise - Actual"))
 
 ```
 
-```{r TA Agents Calls Distribution Area Wise - Percentage, fig.height=15, fig.width=20}
-ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
-  geom_bar(stat='identity', position = 'fill')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90, size = 20), axis.text.y = element_text(size = 20))+ ggtitle("TA Agents Calls Distribution Area Wise - Proportion")
+```{r TA Agents Calls Distribution Area Wise - Percentage, fig.height=5, fig.width=10}
+ggplotly(ggplot(data = TA_Agents_ECL_Groupby, aes(x = date, y = Calls, fill = reorder(Area_Custom, Calls)))+
+  geom_bar(stat='identity', position = 'fill')+ scale_fill_hue(c=300, l=40)+ theme(axis.text.x = element_text(angle = 90, size = 10), axis.text.y = element_text(size = 10))+ ggtitle("TA Agents Calls Distribution Area Wise - Proportion"))
+
+```
+
+```{r Agents_SLABlowns, fig.height=5, fig.width=10}
+df22 <- Eval_TA[, agent_sla := case_when(errorreason %like% 'AGENT_SLA_BLOWN' ~ 1, TRUE ~ 0)][, .('Agent_SLABlowns_%age' = mean(agent_sla)*100), by = date]
+
+
+ggplot(data = df22, aes(x = date, y = `Agent_SLABlowns_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90))+ ggtitle("Agents_SLABlowns_%age")
+
+```
+
+```{r Call_SLABlowns, fig.height=5, fig.width=10}
+df23 <- Eval_TA[, call_sla := case_when(errorreason %like% 'CALL_SLA_BLOWN' ~ 1, TRUE ~ 0)][,.('Call_SLABlowns_%age' = mean(call_sla)*100), by = date]
+
+ggplot(data = df23, aes(x = date, y = `Call_SLABlowns_%age`)) + geom_bar(stat = "identity")+ theme(axis.text.x = element_text(angle = 90))+ ggtitle("Call_SLABlowns_%age")
+
+```
+
+
+
+
